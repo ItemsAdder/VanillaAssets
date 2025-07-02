@@ -3,7 +3,7 @@ name: Auto Zip Release per Branch Esterni
 on:
   schedule:
     - cron: "*/15 * * * *"
-  workflow_dispatch: # Esegui manualmente se vuoi
+  workflow_dispatch:
 
 jobs:
   poll-and-release:
@@ -50,43 +50,73 @@ jobs:
       - name: Processa ogni branch nuovo
         run: |
           for branch in $NEW_BRANCHES; do
-            echo "Verifico se esiste già una release per il branch: $branch..."
+            echo ""
+            echo "========= Processing branch: $branch ========="
 
-            # Controlla release
-            RELEASE_EXISTS=$(curl -s -H "Accept: application/vnd.github+json" \
-              https://api.github.com/repos/${{ github.repository }}/releases/tags/$branch \
-              | jq -r '.id // empty')
+            # Controlla se esiste release con tag == branch
+            RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              https://api.github.com/repos/${{ github.repository }}/releases/tags/$branch)
 
-            if [ -n "$RELEASE_EXISTS" ]; then
+            RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+
+            if [ -n "$RELEASE_ID" ]; then
               echo "Release con tag '$branch' già esistente, skippo."
               continue
             fi
 
-            echo "Clono branch $branch..."
+            # Clona branch
+            echo "Clono $branch..."
             git clone --depth 1 --branch "$branch" \
               https://github.com/InventivetalentDev/minecraft-assets.git \
               "tmp-$branch"
 
-            cd "tmp-$branch"
-
-            if [ -d "assets/minecraft/models" ]; then
-              zip -r "../zips/$branch-models.zip" assets/minecraft/models
-              echo "Creato ZIP per $branch"
+            if [ -d "tmp-$branch/assets/minecraft/models" ]; then
+              zip -r "zips/$branch-models.zip" -j tmp-$branch/assets/minecraft/models/*
+              echo "ZIP creato: zips/$branch-models.zip"
             else
-              echo "Directory assets/minecraft/models non trovata, skippo."
-              cd ..
+              echo "Directory assets/minecraft/models non trovata in $branch, skippo."
               rm -rf "tmp-$branch"
               continue
             fi
 
-            cd ..
             rm -rf "tmp-$branch"
 
-            echo "Creo release con tag $branch..."
-            gh release create "$branch" "zips/$branch-models.zip" \
-              --title "Models for $branch" \
-              --notes "Auto release dei modelli per branch $branch"
+            # Crea release
+            echo "Creo release con tag '$branch'..."
+            RELEASE_RESPONSE=$(curl -s -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              https://api.github.com/repos/${{ github.repository }}/releases \
+              -d @- <<EOF
+{
+  "tag_name": "$branch",
+  "name": "Models for $branch",
+  "body": "Auto-generated release for branch $branch.",
+  "draft": false,
+  "prerelease": false
+}
+EOF
+)
+
+            # Estrai upload URL
+            UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
+
+            if [ -z "$UPLOAD_URL" ]; then
+              echo "ERRORE: Non sono riuscito a creare la release per $branch"
+              echo "$RELEASE_RESPONSE"
+              continue
+            fi
+
+            # Upload asset
+            echo "Carico ZIP alla release..."
+            curl -s -X POST \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Content-Type: application/zip" \
+              --data-binary @"zips/$branch-models.zip" \
+              "$UPLOAD_URL?name=$branch-models.zip"
+
+            echo "Release completata per $branch."
+            echo "-------------------------------------------"
 
           done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
