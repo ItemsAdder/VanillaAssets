@@ -1,0 +1,151 @@
+name: List Assets in Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Specific branch name to process"
+        required: false
+        default: ""
+      name:
+        description: "Base name for the asset list file"
+        default: "assets-list"
+        required: true
+      path_to_list:
+        description: "Path inside the repo to list files (e.g., assets/minecraft)"
+        required: false
+        default: "assets/minecraft"
+
+jobs:
+  list-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Fetch all branches if no specific branch
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        > branches.txt
+
+        PAGE=1
+        while true; do
+          RESPONSE=$(curl -s -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/branches?per_page=100&page=$PAGE")
+
+          COUNT=$(echo "$RESPONSE" | jq 'length')
+          if [ "$COUNT" -eq 0 ]; then break; fi
+
+          echo "$RESPONSE" | jq -r '.[].name' >> branches.txt
+          PAGE=$((PAGE+1))
+        done
+
+        echo "Fetched branches:"
+        cat branches.txt
+
+    - name: Compare with previous branch list
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        if [ ! -f .last_branches ]; then touch .last_branches; fi
+        comm -23 <(sort branches.txt) <(sort .last_branches) > new_branches.txt
+        echo "New branches detected:"
+        cat new_branches.txt || true
+        cp branches.txt .last_branches
+
+    - name: Exit if no new branches
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        if [ ! -s new_branches.txt ]; then
+          echo "No new branches found. Exiting."
+          exit 0
+        fi
+
+    - name: Create output folder
+      run: mkdir -p output
+
+    - name: Prepare branch list to process
+      run: |
+        if [ "${{ github.event.inputs.branch }}" != "" ]; then
+          echo "${{ github.event.inputs.branch }}" > branches_to_process.txt
+        else
+          cp new_branches.txt branches_to_process.txt
+        fi
+
+    - name: Process each branch
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        NAME: ${{ github.event.inputs.name }}
+        PATH_TO_LIST: ${{ github.event.inputs.path_to_list }}
+      run: |
+        FILE_LIST_NAME="${NAME}-assets-list.txt"
+
+        while read -r branch; do
+          if [ -z "$branch" ]; then continue; fi
+
+          TAG="$branch"
+
+          echo ""
+          echo "========= Processing branch: $branch ========="
+          echo "Release tag: $TAG"
+          echo "Path to list files: $PATH_TO_LIST"
+          echo "Asset list filename: $FILE_LIST_NAME"
+
+          echo "Cloning branch..."
+          git clone --depth 1 --branch "$branch" "https://github.com/${{ github.repository }}.git" "tmp-$branch"
+
+          if [ -d "tmp-$branch/$PATH_TO_LIST" ]; then
+            echo "Generating file list relative to $PATH_TO_LIST..."
+            (cd "tmp-$branch/$PATH_TO_LIST" && find . -type f | sed 's|^\./||') > "output/$FILE_LIST_NAME"
+            echo "File list saved: output/$FILE_LIST_NAME"
+          else
+            echo "Directory '$PATH_TO_LIST' not found in branch $branch. Skipping."
+            rm -rf "tmp-$branch"
+            continue
+          fi
+
+          rm -rf "tmp-$branch"
+
+          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+
+          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+          UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
+
+          if [ -z "$RELEASE_ID" ]; then
+            echo "Release with tag '$TAG' not found, creating..."
+            RELEASE_RESPONSE=$(curl -s -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }}/releases \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"Assets list for $branch\",\"body\":\"Auto-generated assets list for branch $branch.\",\"draft\":false,\"prerelease\":false}")
+
+            RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id // empty')
+            UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
+
+            if [ -z "$RELEASE_ID" ]; then
+              echo "ERROR: Failed to create release for branch $branch"
+              echo "$RELEASE_RESPONSE"
+              continue
+            fi
+          else
+            echo "Release with tag '$TAG' found, attaching asset..."
+            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+            ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name==\"$FILE_LIST_NAME\") | .id // empty")
+            if [ -n "$ASSET_ID" ]; then
+              echo "Deleting existing asset $FILE_LIST_NAME with id $ASSET_ID"
+              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID
+            fi
+          fi
+
+          echo "Uploading asset list file..."
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: text/plain" \
+            --data-binary @"output/$FILE_LIST_NAME" \
+            "$UPLOAD_URL?name=$FILE_LIST_NAME"
+
+          echo "Release processed successfully for branch $branch."
+          echo "-----------------------------------"
+        done < branches_to_process.txt
