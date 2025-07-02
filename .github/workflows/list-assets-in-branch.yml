@@ -10,6 +10,7 @@ on:
       name:
         description: "Base name for the asset list file"
         required: true
+        default: "assets-list"
       path_to_list:
         description: "Path inside the external repo to list files (e.g., assets/minecraft)"
         required: false
@@ -57,7 +58,7 @@ jobs:
         NAME: ${{ github.event.inputs.name }}
         PATH_TO_LIST: ${{ github.event.inputs.path_to_list }}
       run: |
-        FILE_LIST_NAME="${NAME}-assets-list.txt"
+        FILE_LIST_NAME="${NAME}.txt"
         EXTERNAL_REPO="https://github.com/InventivetalentDev/minecraft-assets.git"
         MY_REPO_API="https://api.github.com/repos/${{ github.repository }}"
 
