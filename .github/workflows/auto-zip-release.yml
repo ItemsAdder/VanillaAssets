@@ -123,8 +123,8 @@ jobs:
 
           if [ -d "tmp-$branch/$PATH_TO_ZIP" ]; then
             echo "Creating ZIP archive..."
-            (cd "tmp-$branch" && zip -r "../zips/$branch.zip" "$PATH_TO_ZIP")
-            echo "ZIP created: zips/$branch.zip"
+            (cd "tmp-$branch" && zip -r "../zips/archive.zip" "$PATH_TO_ZIP")
+            echo "ZIP created: zips/archive.zip"
           else
             echo "Directory '$PATH_TO_ZIP' not found in branch $branch. Skipping."
             rm -rf "tmp-$branch"
@@ -154,8 +154,8 @@ jobs:
           curl -s -X POST \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/zip" \
-            --data-binary @"zips/$branch.zip" \
-            "$UPLOAD_URL?name=$branch.zip"
+            --data-binary @"zips/archive.zip" \
+            "$UPLOAD_URL?name=archive.zip"
 
           echo "Release created successfully for branch $branch."
           echo "-----------------------------------"
