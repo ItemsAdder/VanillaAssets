@@ -20,6 +20,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    - name: Restore last_branches cache
+      uses: actions/cache@v4
+      with:
+        path: .last_branches
+        key: last-branches
     - name: Checkout this repository
       uses: actions/checkout@v4
 
@@ -160,3 +165,8 @@ jobs:
           echo "Release processed successfully for branch $branch."
           echo "-----------------------------------"
         done < branches_to_process.txt
+    - name: Save updated last_branches cache
+      uses: actions/cache@v4
+      with:
+        path: .last_branches
+        key: last-branches
