@@ -1,0 +1,92 @@
+name: Auto Zip Release per Branch Esterni
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: # Esegui manualmente se vuoi
+
+jobs:
+  poll-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Recupera lista branch dalla repo remota
+        id: get_branches
+        run: |
+          curl -s -H "Accept: application/vnd.github+json" \
+               https://api.github.com/repos/InventivetalentDev/minecraft-assets/branches \
+            | jq -r '.[].name' > branches.txt
+
+          echo "Branches trovati:"
+          cat branches.txt
+
+      - name: Salva lista branch precedente
+        id: save_previous
+        run: |
+          if [ ! -f .last_branches ]; then
+            touch .last_branches
+          fi
+
+          NEW_BRANCHES=$(comm -23 <(sort branches.txt) <(sort .last_branches))
+
+          echo "NEW_BRANCHES<<EOF" >> $GITHUB_ENV
+          echo "$NEW_BRANCHES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          cp branches.txt .last_branches
+
+      - name: Esci se nessun branch nuovo
+        if: env.NEW_BRANCHES == ''
+        run: |
+          echo "Nessun branch nuovo trovato. Esco."
+          exit 0
+
+      - name: Crea cartella per ZIP
+        run: mkdir zips
+
+      - name: Processa ogni branch nuovo
+        run: |
+          for branch in $NEW_BRANCHES; do
+            echo "Verifico se esiste già una release per il branch: $branch..."
+
+            # Controlla release
+            RELEASE_EXISTS=$(curl -s -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/releases/tags/$branch \
+              | jq -r '.id // empty')
+
+            if [ -n "$RELEASE_EXISTS" ]; then
+              echo "Release con tag '$branch' già esistente, skippo."
+              continue
+            fi
+
+            echo "Clono branch $branch..."
+            git clone --depth 1 --branch "$branch" \
+              https://github.com/InventivetalentDev/minecraft-assets.git \
+              "tmp-$branch"
+
+            cd "tmp-$branch"
+
+            if [ -d "assets/minecraft/models" ]; then
+              zip -r "../zips/$branch-models.zip" assets/minecraft/models
+              echo "Creato ZIP per $branch"
+            else
+              echo "Directory assets/minecraft/models non trovata, skippo."
+              cd ..
+              rm -rf "tmp-$branch"
+              continue
+            fi
+
+            cd ..
+            rm -rf "tmp-$branch"
+
+            echo "Creo release con tag $branch..."
+            gh release create "$branch" "zips/$branch-models.zip" \
+              --title "Models for $branch" \
+              --notes "Auto release dei modelli per branch $branch"
+
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
