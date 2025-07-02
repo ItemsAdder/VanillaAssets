@@ -10,113 +10,101 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout this repository
-        uses: actions/checkout@v4
+    - name: Checkout this repository
+      uses: actions/checkout@v4
 
-      - name: Recupera lista branch dalla repo remota
-        id: get_branches
-        run: |
-          curl -s -H "Accept: application/vnd.github+json" \
-               https://api.github.com/repos/InventivetalentDev/minecraft-assets/branches \
-            | jq -r '.[].name' > branches.txt
+    - name: Recupera lista branch dalla repo remota
+      id: get_branches
+      run: |
+        curl -s -H "Accept: application/vnd.github+json" \
+             https://api.github.com/repos/InventivetalentDev/minecraft-assets/branches \
+          | jq -r '.[].name' > branches.txt
 
-          echo "Branches trovati:"
-          cat branches.txt
+        echo "Branches trovati:"
+        cat branches.txt
 
-      - name: Salva lista branch precedente
-        id: save_previous
-        run: |
-          if [ ! -f .last_branches ]; then
-            touch .last_branches
+    - name: Salva lista branch precedente
+      run: |
+        if [ ! -f .last_branches ]; then
+          touch .last_branches
+        fi
+
+        NEW_BRANCHES=$(comm -23 <(sort branches.txt) <(sort .last_branches))
+
+        echo "NEW_BRANCHES<<EOF" >> $GITHUB_ENV
+        echo "$NEW_BRANCHES" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
+
+        cp branches.txt .last_branches
+
+    - name: Esci se nessun branch nuovo
+      if: env.NEW_BRANCHES == ''
+      run: |
+        echo "Nessun branch nuovo trovato. Esco."
+        exit 0
+
+    - name: Crea cartella per ZIP
+      run: mkdir zips
+
+    - name: Processa ogni branch nuovo
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        for branch in $NEW_BRANCHES; do
+          echo ""
+          echo "========= Processing branch: $branch ========="
+
+          # Verifica se esiste release con quel tag
+          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$branch)
+
+          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Release con tag '$branch' già esistente, skippo."
+            continue
           fi
 
-          NEW_BRANCHES=$(comm -23 <(sort branches.txt) <(sort .last_branches))
+          # Clona branch
+          git clone --depth 1 --branch "$branch" \
+            https://github.com/InventivetalentDev/minecraft-assets.git \
+            "tmp-$branch"
 
-          echo "NEW_BRANCHES<<EOF" >> $GITHUB_ENV
-          echo "$NEW_BRANCHES" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-          cp branches.txt .last_branches
-
-      - name: Esci se nessun branch nuovo
-        if: env.NEW_BRANCHES == ''
-        run: |
-          echo "Nessun branch nuovo trovato. Esco."
-          exit 0
-
-      - name: Crea cartella per ZIP
-        run: mkdir zips
-
-      - name: Processa ogni branch nuovo
-        run: |
-          for branch in $NEW_BRANCHES; do
-            echo ""
-            echo "========= Processing branch: $branch ========="
-
-            # Controlla se esiste release con tag == branch
-            RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              https://api.github.com/repos/${{ github.repository }}/releases/tags/$branch)
-
-            RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
-
-            if [ -n "$RELEASE_ID" ]; then
-              echo "Release con tag '$branch' già esistente, skippo."
-              continue
-            fi
-
-            # Clona branch
-            echo "Clono $branch..."
-            git clone --depth 1 --branch "$branch" \
-              https://github.com/InventivetalentDev/minecraft-assets.git \
-              "tmp-$branch"
-
-            if [ -d "tmp-$branch/assets/minecraft/models" ]; then
-              zip -r "zips/$branch-models.zip" -j tmp-$branch/assets/minecraft/models/*
-              echo "ZIP creato: zips/$branch-models.zip"
-            else
-              echo "Directory assets/minecraft/models non trovata in $branch, skippo."
-              rm -rf "tmp-$branch"
-              continue
-            fi
-
+          if [ -d "tmp-$branch/assets/minecraft/models" ]; then
+            zip -r "zips/$branch-models.zip" -j tmp-$branch/assets/minecraft/models/*
+            echo "ZIP creato: zips/$branch-models.zip"
+          else
+            echo "Directory assets/minecraft/models non trovata in $branch, skippo."
             rm -rf "tmp-$branch"
+            continue
+          fi
 
-            # Crea release
-            echo "Creo release con tag '$branch'..."
-            RELEASE_RESPONSE=$(curl -s -X POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              https://api.github.com/repos/${{ github.repository }}/releases \
-              -d @- <<EOF
-{
-  "tag_name": "$branch",
-  "name": "Models for $branch",
-  "body": "Auto-generated release for branch $branch.",
-  "draft": false,
-  "prerelease": false
-}
-EOF
-)
+          rm -rf "tmp-$branch"
 
-            # Estrai upload URL
-            UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          # Crea release
+          echo "Creo release con tag '$branch'..."
+          RELEASE_RESPONSE=$(curl -s -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -d "{\"tag_name\":\"$branch\",\"name\":\"Models for $branch\",\"body\":\"Auto-generated release for branch $branch.\",\"draft\":false,\"prerelease\":false}")
 
-            if [ -z "$UPLOAD_URL" ]; then
-              echo "ERRORE: Non sono riuscito a creare la release per $branch"
-              echo "$RELEASE_RESPONSE"
-              continue
-            fi
+          UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
 
-            # Upload asset
-            echo "Carico ZIP alla release..."
-            curl -s -X POST \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Content-Type: application/zip" \
-              --data-binary @"zips/$branch-models.zip" \
-              "$UPLOAD_URL?name=$branch-models.zip"
+          if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
+            echo "ERRORE: Creazione release fallita per $branch"
+            echo "$RELEASE_RESPONSE"
+            continue
+          fi
 
-            echo "Release completata per $branch."
-            echo "-------------------------------------------"
+          # Carica ZIP
+          echo "Carico asset..."
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/zip" \
+            --data-binary @"zips/$branch-models.zip" \
+            "$UPLOAD_URL?name=$branch-models.zip"
 
-          done
+          echo "Release completata per $branch."
+          echo "-----------------------------------"
