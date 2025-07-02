@@ -129,7 +129,7 @@ jobs:
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: token $GH_TOKEN" \
               https://api.github.com/repos/${{ github.repository }}/releases \
-              -d "{\"tag_name\":\"$TAG\",\"name\":\"Models for $branch\",\"body\":\"Auto-generated release for branch $branch.\",\"draft\":false,\"prerelease\":false}")
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$branch\",\"body\":\"Auto-generated release for branch $branch.\",\"draft\":false,\"prerelease\":false}")
 
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id // empty')
             UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
