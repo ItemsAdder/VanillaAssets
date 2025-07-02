@@ -21,46 +21,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Fetch all branches if no specific branch
-      if: ${{ github.event.inputs.branch == '' }}
-      run: |
-        > branches.txt
-
-        PAGE=1
-        while true; do
-          RESPONSE=$(curl -s -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/branches?per_page=100&page=$PAGE")
-
-          COUNT=$(echo "$RESPONSE" | jq 'length')
-          if [ "$COUNT" -eq 0 ]; then break; fi
-
-          echo "$RESPONSE" | jq -r '.[].name' >> branches.txt
-          PAGE=$((PAGE+1))
-        done
-
-        echo "Fetched branches:"
-        cat branches.txt
-
-    - name: Compare with previous branch list
-      if: ${{ github.event.inputs.branch == '' }}
-      run: |
-        if [ ! -f .last_branches ]; then touch .last_branches; fi
-        comm -23 <(sort branches.txt) <(sort .last_branches) > new_branches.txt
-        echo "New branches detected:"
-        cat new_branches.txt || true
-        cp branches.txt .last_branches
-
-    - name: Exit if no new branches
-      if: ${{ github.event.inputs.branch == '' }}
-      run: |
-        if [ ! -s new_branches.txt ]; then
-          echo "No new branches found. Exiting."
-          exit 0
-        fi
-
     - name: Create output folder
       run: mkdir -p output
 
@@ -69,6 +29,27 @@ jobs:
         if [ "${{ github.event.inputs.branch }}" != "" ]; then
           echo "${{ github.event.inputs.branch }}" > branches_to_process.txt
         else
+          # Fetch all branches from InventivetalentDev/minecraft-assets
+          > branches.txt
+          PAGE=1
+          while true; do
+            RESPONSE=$(curl -s -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/InventivetalentDev/minecraft-assets/branches?per_page=100&page=$PAGE")
+            COUNT=$(echo "$RESPONSE" | jq 'length')
+            if [ "$COUNT" -eq 0 ]; then break; fi
+            echo "$RESPONSE" | jq -r '.[].name' >> branches.txt
+            PAGE=$((PAGE+1))
+          done
+
+          if [ ! -f .last_branches ]; then touch .last_branches; fi
+          comm -23 <(sort branches.txt) <(sort .last_branches) > new_branches.txt
+          cp branches.txt .last_branches
+
+          if [ ! -s new_branches.txt ]; then
+            echo "No new branches found. Exiting."
+            exit 0
+          fi
+
           cp new_branches.txt branches_to_process.txt
         fi
 
@@ -79,6 +60,7 @@ jobs:
         PATH_TO_LIST: ${{ github.event.inputs.path_to_list }}
       run: |
         FILE_LIST_NAME="${NAME}-assets-list.txt"
+        REPO_URL="https://github.com/InventivetalentDev/minecraft-assets.git"
 
         while read -r branch; do
           if [ -z "$branch" ]; then continue; fi
@@ -91,14 +73,14 @@ jobs:
           echo "Path to list files: $PATH_TO_LIST"
           echo "Asset list filename: $FILE_LIST_NAME"
 
-          echo "Checking if branch $branch exists..."
-          if ! git ls-remote --heads https://github.com/${{ github.repository }}.git "$branch" | grep -q "$branch"; then
+          echo "Checking if branch $branch exists in $REPO_URL..."
+          if ! git ls-remote --heads "$REPO_URL" "$branch" | grep -q "$branch"; then
             echo "Branch $branch NOT found in remote, skipping."
             continue
           fi
 
-          echo "Cloning branch..."
-          git clone --depth 1 --branch "$branch" https://github.com/${{ github.repository }}.git "tmp-$branch"
+          echo "Cloning branch $branch from $REPO_URL..."
+          git clone --depth 1 --branch "$branch" "$REPO_URL" "tmp-$branch"
 
           if [ -d "tmp-$branch/$PATH_TO_LIST" ]; then
             echo "Generating file list relative to $PATH_TO_LIST..."
@@ -114,7 +96,7 @@ jobs:
 
           RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
             -H "Authorization: token $GH_TOKEN" \
-            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+            https://api.github.com/repos/InventivetalentDev/minecraft-assets/releases/tags/$TAG)
 
           RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
           UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
@@ -124,7 +106,7 @@ jobs:
             RELEASE_RESPONSE=$(curl -s -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: token $GH_TOKEN" \
-              https://api.github.com/repos/${{ github.repository }}/releases \
+              https://api.github.com/repos/InventivetalentDev/minecraft-assets/releases \
               -d "{\"tag_name\":\"$TAG\",\"name\":\"Assets list for $branch\",\"body\":\"Auto-generated assets list for branch $branch.\",\"draft\":false,\"prerelease\":false}")
 
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id // empty')
@@ -137,11 +119,11 @@ jobs:
             fi
           else
             echo "Release with tag '$TAG' found, attaching asset..."
-            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/InventivetalentDev/minecraft-assets/releases/$RELEASE_ID/assets)
             ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name==\"$FILE_LIST_NAME\") | .id // empty")
             if [ -n "$ASSET_ID" ]; then
               echo "Deleting existing asset $FILE_LIST_NAME with id $ASSET_ID"
-              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID
+              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/InventivetalentDev/minecraft-assets/releases/assets/$ASSET_ID
             fi
           fi
 
