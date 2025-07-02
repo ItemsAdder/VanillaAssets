@@ -1,0 +1,60 @@
+name: Auto Compress All Assets
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Auto Compress Models
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-zip-release.yml/dispatches \
+            -d '{
+              "ref": "main",
+              "inputs": {
+                "branch": "",
+                "name": "items",
+                "path_to_zip": "assets/minecraft/items"
+              }
+            }'
+      - name: Auto Compress Models
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-zip-release.yml/dispatches \
+            -d '{
+              "ref": "main",
+              "inputs": {
+                "branch": "",
+                "name": "models",
+                "path_to_zip": "assets/minecraft/models"
+              }
+            }'
+      - name: Auto Compress Blockstates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/auto-zip-release.yml/dispatches \
+            -d '{
+              "ref": "main",
+              "inputs": {
+                "branch": "",
+                "name": "blockstates",
+                "path_to_zip": "assets/minecraft/blockstates"
+              }
+            }'
