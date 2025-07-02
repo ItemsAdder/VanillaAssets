@@ -78,6 +78,7 @@ jobs:
           echo "${{ github.event.inputs.branch }}" > branches_to_process.txt
         else
           cp new_branches.txt branches_to_process.txt
+        fi
 
     # Main processing step
     - name: Process each branch
