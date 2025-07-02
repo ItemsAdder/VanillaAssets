@@ -7,6 +7,9 @@ jobs:
   delete:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Delete all releases
         run: |
           gh api repos/${{ github.repository }}/releases --paginate -q '.[].id' | while read id; do
