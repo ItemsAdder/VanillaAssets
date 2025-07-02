@@ -8,9 +8,8 @@ on:
         required: false
         default: ""
       name:
-        description: "Base name for tag suffix and zip file"
+        description: "Base name for zip file"
         required: true
-        default: "models"
       path_to_zip:
         description: "Path inside the repo to include in ZIP (e.g., assets/minecraft/models)"
         required: false
@@ -24,7 +23,6 @@ jobs:
     - name: Checkout this repository
       uses: actions/checkout@v4
 
-    # Fetch all branches if no specific branch
     - name: Fetch all branches from the remote repository
       if: ${{ github.event.inputs.branch == '' }}
       run: |
@@ -48,7 +46,6 @@ jobs:
         echo "Fetched branches:"
         cat branches.txt
 
-    # Compare with saved list
     - name: Compare with previous branch list
       if: ${{ github.event.inputs.branch == '' }}
       run: |
@@ -73,7 +70,6 @@ jobs:
     - name: Create output folder
       run: mkdir -p zips
 
-    # Prepare list of branches to process
     - name: Prepare branch list to process
       run: |
         if [ "${{ github.event.inputs.branch }}" != "" ]; then
@@ -82,14 +78,12 @@ jobs:
           cp new_branches.txt branches_to_process.txt
         fi
 
-    # Main processing
     - name: Process each branch
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         NAME: ${{ github.event.inputs.name }}
         PATH_TO_ZIP: ${{ github.event.inputs.path_to_zip }}
       run: |
-        TAG_SUFFIX="-$NAME"
         ZIP_NAME="$NAME.zip"
 
         while read -r branch; do
@@ -97,7 +91,7 @@ jobs:
             continue
           fi
 
-          TAG="${branch}${TAG_SUFFIX}"
+          TAG="$branch"
 
           echo ""
           echo "========= Processing branch: $branch ========="
