@@ -1,0 +1,27 @@
+name: Delete All Releases and Tags
+
+on:
+  workflow_dispatch:
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete all releases
+        run: |
+          gh api repos/${{ github.repository }}/releases --paginate -q '.[].id' | while read id; do
+            echo "Deleting release ID $id"
+            gh api --method DELETE repos/${{ github.repository }}/releases/$id
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete all tags
+        run: |
+          git fetch --tags
+          git tag -l | while read tag; do
+            echo "Deleting tag $tag locally"
+            git tag -d "$tag"
+            echo "Deleting tag $tag remotely"
+            git push origin ":refs/tags/$tag"
+          done
