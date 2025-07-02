@@ -2,17 +2,21 @@ name: Auto Zip Release for External Branches
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       branch:
         description: "Specific branch name to process"
         required: false
         default: ""
-      tag_prefix:
-        description: "Prefix for the release tag"
+      tag_suffix:
+        description: "Suffix for the release tag"
         required: false
-        default: "models-"
+        default: "-models"
+      path_to_zip:
+        description: "Path inside the repo to include in ZIP (e.g., assets/minecraft/models)"
+        required: false
+        default: "assets/minecraft/models"
 
 jobs:
   poll-and-release:
@@ -22,7 +26,7 @@ jobs:
     - name: Checkout this repository
       uses: actions/checkout@v4
 
-    # Download the list of branches only if no specific branch is provided
+    # Fetch branch list if no specific branch
     - name: Fetch all branches from the remote repository
       if: ${{ github.event.inputs.branch == '' }}
       run: |
@@ -46,7 +50,7 @@ jobs:
         echo "Fetched branches:"
         cat branches.txt
 
-    # Compare with the previously saved list
+    # Compare with saved list
     - name: Compare with previous branch list
       if: ${{ github.event.inputs.branch == '' }}
       run: |
@@ -71,7 +75,7 @@ jobs:
     - name: Create output folder
       run: mkdir zips
 
-    # Determine which branches to process
+    # Prepare list of branches to process
     - name: Prepare branch list to process
       run: |
         if [ "${{ github.event.inputs.branch }}" != "" ]; then
@@ -80,24 +84,26 @@ jobs:
           cp new_branches.txt branches_to_process.txt
         fi
 
-    # Main processing step
+    # Main processing
     - name: Process each branch
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        TAG_PREFIX: ${{ github.event.inputs.tag_prefix }}
+        TAG_SUFFIX: ${{ github.event.inputs.tag_suffix }}
+        PATH_TO_ZIP: ${{ github.event.inputs.path_to_zip }}
       run: |
         while read -r branch; do
           if [ -z "$branch" ]; then
             continue
           fi
 
-          TAG="${TAG_PREFIX}${branch}"
+          TAG="${branch}${TAG_SUFFIX}"
 
           echo ""
           echo "========= Processing branch: $branch ========="
-          echo "Release tag will be: $TAG"
+          echo "Release tag: $TAG"
+          echo "Path to zip: $PATH_TO_ZIP"
 
-          # Check if the release already exists
+          # Check if release exists
           RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
             -H "Authorization: token $GH_TOKEN" \
             https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
@@ -105,29 +111,29 @@ jobs:
           RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
 
           if [ -n "$RELEASE_ID" ]; then
-            echo "A release with tag '$TAG' already exists. Skipping."
+            echo "Release with tag '$TAG' already exists. Skipping."
             continue
           fi
 
-          # Clone the branch
+          # Clone repo
           echo "Cloning branch..."
           git clone --depth 1 --branch "$branch" \
             https://github.com/InventivetalentDev/minecraft-assets.git \
             "tmp-$branch"
 
-          if [ -d "tmp-$branch/assets/minecraft/models" ]; then
+          if [ -d "tmp-$branch/$PATH_TO_ZIP" ]; then
             echo "Creating ZIP archive..."
-            (cd "tmp-$branch" && zip -r "../zips/$branch-models.zip" assets/minecraft/models)
-            echo "ZIP created: zips/$branch-models.zip"
+            (cd "tmp-$branch" && zip -r "../zips/$branch.zip" "$PATH_TO_ZIP")
+            echo "ZIP created: zips/$branch.zip"
           else
-            echo "Directory 'assets/minecraft/models' not found in branch $branch. Skipping."
+            echo "Directory '$PATH_TO_ZIP' not found in branch $branch. Skipping."
             rm -rf "tmp-$branch"
             continue
           fi
 
           rm -rf "tmp-$branch"
 
-          # Create the release
+          # Create release
           echo "Creating release with tag '$TAG'..."
           RELEASE_RESPONSE=$(curl -s -X POST \
             -H "Accept: application/vnd.github+json" \
@@ -138,19 +144,19 @@ jobs:
           UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
 
           if [ -z "$UPLOAD_URL" ] || [ "$UPLOAD_URL" = "null" ]; then
-            echo "ERROR: Failed to create the release for branch $branch"
+            echo "ERROR: Failed to create release for branch $branch"
             echo "$RELEASE_RESPONSE"
             continue
           fi
 
-          # Upload the ZIP asset
-          echo "Uploading ZIP asset..."
+          # Upload ZIP
+          echo "Uploading ZIP..."
           curl -s -X POST \
             -H "Authorization: token $GH_TOKEN" \
             -H "Content-Type: application/zip" \
-            --data-binary @"zips/$branch-models.zip" \
-            "$UPLOAD_URL?name=$branch-models.zip"
+            --data-binary @"zips/$branch.zip" \
+            "$UPLOAD_URL?name=$branch.zip"
 
-          echo "Release successfully created for branch $branch."
+          echo "Release created successfully for branch $branch."
           echo "-----------------------------------"
         done < branches_to_process.txt
