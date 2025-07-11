@@ -27,14 +27,17 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        set -e
+
         IFS=',' read -ra TAGS <<< "${{ github.event.inputs.tags }}"
 
         for TAG in "${TAGS[@]}"; do
-          echo "Processing tag $TAG..."
+          echo ""
+          echo "======== Processing tag $TAG ========"
+          echo ""
 
-          # Get release info
           RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
-          RELEASE_ID=$(echo "$RELEASE" | jq -r '.id')
+          RELEASE_ID=$(echo "$RELEASE" | jq -r '.id // empty')
 
           if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
             echo "Release not found for tag $TAG, skipping..."
@@ -46,21 +49,48 @@ jobs:
           mkdir -p "downloads/$TAG"
           mkdir -p "vanilla_assets/$TAG"
 
-          echo "$ASSETS" | while read -r NAME URL; do
-            echo "Downloading $NAME from $TAG..."
-            curl -sL -H "Authorization: token $GH_TOKEN" -H "Accept: application/octet-stream" "$URL" -o "downloads/$TAG/$NAME"
-          done
+          echo "$ASSETS" > assets_to_download.txt
 
-          # Move txt directly
-          cp "downloads/$TAG/assets-list.txt" "vanilla_assets/$TAG/" || true
+          echo "Downloading files for tag $TAG in parallel..."
 
-          # Extract all zips
-          for ZIPFILE in blockstates.zip items.zip models.zip; do
-            if [ -f "downloads/$TAG/$ZIPFILE" ]; then
-              unzip -oq "downloads/$TAG/$ZIPFILE" -d "vanilla_assets/$TAG"
+          JOBS=0
+          cat assets_to_download.txt | while read -r NAME URL; do
+            (
+              echo "➡️  $NAME"
+              curl -# --connect-timeout 10 --max-time 180 -L \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/octet-stream" \
+                "$URL" -o "downloads/$TAG/$NAME" || echo "❌ Failed to download $NAME"
+            ) &
+
+            JOBS=$((JOBS+1))
+            if [ "$JOBS" -ge 3 ]; then
+              wait
+              JOBS=0
             fi
           done
 
+          wait  # Wait for remaining background jobs
+
+          echo "Finished downloads for $TAG"
+
+          # Copy txt
+          if [ -f "downloads/$TAG/assets-list.txt" ]; then
+            cp "downloads/$TAG/assets-list.txt" "vanilla_assets/$TAG/"
+          fi
+
+          # Extract zips
+          for ZIP in blockstates.zip items.zip models.zip; do
+            FILE="downloads/$TAG/$ZIP"
+            if [ -f "$FILE" ]; then
+              echo "Extracting $ZIP into vanilla_assets/$TAG/"
+              unzip -oq "$FILE" -d "vanilla_assets/$TAG"
+            else
+              echo "⚠️  $ZIP not found in $TAG"
+            fi
+          done
+
+          echo "✅ Done processing $TAG"
         done
 
     - name: Create vanilla_assets.zip
