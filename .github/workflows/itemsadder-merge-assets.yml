@@ -1,0 +1,112 @@
+name: ItemsAdder Merge Vanilla Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: "Comma-separated list of tags (e.g. 1.20.6,1.21.1,1.21.3)"
+        required: true
+
+jobs:
+  merge-assets:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Install unzip
+      run: sudo apt-get update && sudo apt-get install -y unzip
+
+    - name: Prepare folders
+      run: |
+        mkdir -p vanilla_assets
+        mkdir downloads
+
+    - name: Process each tag
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        IFS=',' read -ra TAGS <<< "${{ github.event.inputs.tags }}"
+
+        for TAG in "${TAGS[@]}"; do
+          echo "Processing tag $TAG..."
+
+          # Get release info
+          RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+          RELEASE_ID=$(echo "$RELEASE" | jq -r '.id')
+
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+            echo "Release not found for tag $TAG, skipping..."
+            continue
+          fi
+
+          ASSETS=$(echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.url)"')
+
+          mkdir -p "downloads/$TAG"
+          mkdir -p "vanilla_assets/$TAG"
+
+          echo "$ASSETS" | while read -r NAME URL; do
+            echo "Downloading $NAME from $TAG..."
+            curl -sL -H "Authorization: token $GH_TOKEN" -H "Accept: application/octet-stream" "$URL" -o "downloads/$TAG/$NAME"
+          done
+
+          # Move txt directly
+          cp "downloads/$TAG/assets-list.txt" "vanilla_assets/$TAG/" || true
+
+          # Extract all zips
+          for ZIPFILE in blockstates.zip items.zip models.zip; do
+            if [ -f "downloads/$TAG/$ZIPFILE" ]; then
+              unzip -oq "downloads/$TAG/$ZIPFILE" -d "vanilla_assets/$TAG"
+            fi
+          done
+
+        done
+
+    - name: Create vanilla_assets.zip
+      run: |
+        cd vanilla_assets
+        zip -r ../vanilla_assets.zip .
+        cd ..
+
+    - name: Get or create final release
+      id: release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/tags/itemsadder-required-vanilla-assets)
+        RELEASE_ID=$(echo "$RELEASE" | jq -r '.id // empty')
+
+        if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+          echo "Creating release..."
+          RESPONSE=$(curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/releases \
+            -d "{\"tag_name\":\"itemsadder-required-vanilla-assets\",\"name\":\"ItemsAdder Required Vanilla Assets\",\"body\":\"Auto-generated merged vanilla assets.\",\"draft\":false,\"prerelease\":false}")
+          RELEASE_ID=$(echo "$RESPONSE" | jq -r '.id')
+        fi
+
+        echo "RELEASE_ID=$RELEASE_ID" >> $GITHUB_ENV
+
+    - name: Delete old asset if exists
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        ASSETS=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+        ID=$(echo "$ASSETS" | jq -r '.[] | select(.name == "vanilla_assets.zip") | .id')
+        if [ -n "$ID" ]; then
+          echo "Deleting existing vanilla_assets.zip (id=$ID)..."
+          curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ID
+        fi
+
+    - name: Upload new merged ZIP
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo "Uploading vanilla_assets.zip..."
+        curl -s -X POST \
+          -H "Authorization: token $GH_TOKEN" \
+          -H "Content-Type: application/zip" \
+          --data-binary @"vanilla_assets.zip" \
+          "https://uploads.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets?name=vanilla_assets.zip"
