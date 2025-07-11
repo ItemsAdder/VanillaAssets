@@ -54,7 +54,7 @@ jobs:
           echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.browser_download_url)"' > assets_to_download.txt
 
           JOBS=0
-          cat assets_to_download.txt | while read -r NAME URL; do
+          while read -r NAME URL; do
             (
               echo "➡️  $NAME"
               curl -# --connect-timeout 10 --max-time 180 -L \
@@ -68,7 +68,7 @@ jobs:
               wait
               JOBS=0
             fi
-          done
+          done < assets_to_download.txt
 
           wait
 
