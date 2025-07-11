@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: "Comma-separated list of tags (e.g. 1.20.6,1.21.4,1.21.5)"
+        description: "Comma-separated list of tags (e.g. 1.20.6, 1.21.4, 1.21.5, 1.21.6, 1.21.7)"
         required: true
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
 
           echo "Downloading files for tag $TAG in parallel..."
 
-          echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.url)"' > assets_to_download.txt
+          echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.browser_download_url)"' > assets_to_download.txt
 
           JOBS=0
           cat assets_to_download.txt | while read -r NAME URL; do
@@ -98,8 +98,6 @@ jobs:
               cp "$FILE" "vanilla_assets/$TAG/$BASENAME"
             fi
           done
-
-
 
           echo "✅ Done processing $TAG"
         done
