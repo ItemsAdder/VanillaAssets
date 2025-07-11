@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: "Comma-separated list of tags (e.g. 1.20.6, 1.21.4, 1.21.5, 1.21.6, 1.21.7)"
+        description: "Comma-separated list of tags (e.g. 1.20.6,1.21.4,1.21.5)"
         required: true
 
 jobs:
@@ -31,27 +31,27 @@ jobs:
 
         IFS=',' read -ra TAGS <<< "${{ github.event.inputs.tags }}"
 
-        for TAG in "${TAGS[@]}"; do
+        for RAW_TAG in "${TAGS[@]}"; do
+          TAG=$(echo "$RAW_TAG" | xargs)  # remove spaces
+
           echo ""
           echo "======== Processing tag $TAG ========"
-          echo ""
 
-          RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+          RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
           RELEASE_ID=$(echo "$RELEASE" | jq -r '.id // empty')
 
           if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
-            echo "Release not found for tag $TAG, skipping..."
+            echo "❌ Release not found for tag $TAG, skipping..."
             continue
           fi
-
-          ASSETS=$(echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.url)"')
 
           mkdir -p "downloads/$TAG"
           mkdir -p "vanilla_assets/$TAG"
 
-          echo "$ASSETS" > assets_to_download.txt
-
           echo "Downloading files for tag $TAG in parallel..."
+
+          echo "$RELEASE" | jq -r '.assets[] | "\(.name) \(.url)"' > assets_to_download.txt
 
           JOBS=0
           cat assets_to_download.txt | while read -r NAME URL; do
@@ -70,25 +70,36 @@ jobs:
             fi
           done
 
-          wait  # Wait for remaining background jobs
+          wait
 
-          echo "Finished downloads for $TAG"
+          echo "✅ Finished downloads for $TAG"
 
-          # Copy txt
-          if [ -f "downloads/$TAG/assets-list.txt" ]; then
-            cp "downloads/$TAG/assets-list.txt" "vanilla_assets/$TAG/"
-          fi
+          # Copy .txt files directly
+          for FILE in downloads/$TAG/*.txt; do
+            [ -f "$FILE" ] && cp "$FILE" "vanilla_assets/$TAG/"
+          done
 
-          # Extract zips
-          for ZIP in blockstates.zip items.zip models.zip; do
-            FILE="downloads/$TAG/$ZIP"
-            if [ -f "$FILE" ]; then
-              echo "Extracting $ZIP into vanilla_assets/$TAG/"
+          # Handle all .zip files (except source code ones)
+          for FILE in downloads/$TAG/*.zip*; do
+            [ -f "$FILE" ] || continue
+
+            BASENAME=$(basename "$FILE")
+
+            if [[ "$BASENAME" == *source* ]]; then
+              echo "⏭️  Skipping source zip: $BASENAME"
+              continue
+            fi
+
+            if [[ "$BASENAME" == *.zip ]]; then
+              echo "📦 Extracting $BASENAME into vanilla_assets/$TAG/"
               unzip -oq "$FILE" -d "vanilla_assets/$TAG"
             else
-              echo "⚠️  $ZIP not found in $TAG"
+              echo "📁 Copying special zip-like file $BASENAME to vanilla_assets/$TAG/"
+              cp "$FILE" "vanilla_assets/$TAG/$BASENAME"
             fi
           done
+
+
 
           echo "✅ Done processing $TAG"
         done
@@ -104,7 +115,9 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/tags/itemsadder-required-vanilla-assets)
+        RELEASE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+          https://api.github.com/repos/${{ github.repository }}/releases/tags/itemsadder-required-vanilla-assets)
+
         RELEASE_ID=$(echo "$RELEASE" | jq -r '.id // empty')
 
         if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
@@ -123,18 +136,21 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        ASSETS=$(curl -s -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+        ASSETS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+          https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+
         ID=$(echo "$ASSETS" | jq -r '.[] | select(.name == "vanilla_assets.zip") | .id')
         if [ -n "$ID" ]; then
-          echo "Deleting existing vanilla_assets.zip (id=$ID)..."
-          curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ID
+          echo "🗑️  Deleting existing vanilla_assets.zip (id=$ID)..."
+          curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/assets/$ID
         fi
 
     - name: Upload new merged ZIP
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo "Uploading vanilla_assets.zip..."
+        echo "📤 Uploading vanilla_assets.zip..."
         curl -s -X POST \
           -H "Authorization: token $GH_TOKEN" \
           -H "Content-Type: application/zip" \
