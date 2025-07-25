@@ -1,3 +1,89 @@
+name: Compress Assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Specific branch name to process"
+        required: false
+        default: ""
+      name:
+        description: "Base name for zip file"
+        required: true
+      path_to_zip:
+        description: "Path inside the repo to include in ZIP (e.g., assets/minecraft/models)"
+        required: false
+        default: "assets/minecraft/models"
+
+jobs:
+  poll-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Restore last_branches cache
+      uses: actions/cache@v4
+      with:
+        path: .last_branches
+        key: last-branches
+    - name: Checkout this repository
+      uses: actions/checkout@v4
+
+    - name: Fetch all branches from the remote repository
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        > branches.txt
+
+        PAGE=1
+        while true; do
+          RESPONSE=$(curl -s -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/InventivetalentDev/minecraft-assets/branches?per_page=100&page=$PAGE")
+
+          COUNT=$(echo "$RESPONSE" | jq 'length')
+          if [ "$COUNT" -eq 0 ]; then
+            break
+          fi
+
+          echo "$RESPONSE" | jq -r '.[].name' >> branches.txt
+
+          PAGE=$((PAGE+1))
+        done
+
+        echo "Fetched branches:"
+        cat branches.txt
+
+    - name: Compare with previous branch list
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        if [ ! -f .last_branches ]; then
+          touch .last_branches
+        fi
+
+        comm -23 <(sort branches.txt) <(sort .last_branches) > new_branches.txt
+
+        echo "New branches detected:"
+        cat new_branches.txt || true
+
+        cp branches.txt .last_branches
+
+    - name: Exit if no new branches
+      if: ${{ github.event.inputs.branch == '' }}
+      run: |
+        if [ ! -s new_branches.txt ]; then
+          echo "No new branches found. Exiting."
+          exit 0
+        fi
+        
+    - name: Create output folder
+      run: mkdir -p zips
+
+    - name: Prepare branch list to process
+      run: |
+        if [ "${{ github.event.inputs.branch }}" != "" ]; then
+          echo "${{ github.event.inputs.branch }}" > branches_to_process.txt
+        else
+          cp new_branches.txt branches_to_process.txt
+        fi
+
     - name: Process each branch
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -11,12 +97,6 @@
             continue
           fi
 
-          # Skip if branch doesn't contain "." (e.g. snapshot) or contains "-" (e.g. prerelease)
-          if [[ "$branch" != *"."* || "$branch" == *"-"* ]]; then
-            echo "Skipping branch '$branch' (not a stable version)."
-            continue
-          fi
-
           TAG="$branch"
 
           echo ""
@@ -24,27 +104,6 @@
           echo "Release tag: $TAG"
           echo "Path to zip: $PATH_TO_ZIP"
           echo "Zip file name: $ZIP_NAME"
-
-          # Check if release already exists and contains the asset
-          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
-
-          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
-
-          if [ -n "$RELEASE_ID" ]; then
-            echo "Release for tag '$TAG' already exists, checking asset..."
-            EXISTING_ASSET=$(curl -s -H "Accept: application/vnd.github+json" \
-              -H "Authorization: token $GH_TOKEN" \
-              https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets | jq -r ".[] | select(.name==\"$ZIP_NAME\") | .id // empty")
-
-            if [ -n "$EXISTING_ASSET" ]; then
-              echo "Asset '$ZIP_NAME' already exists in release '$TAG', skipping branch."
-              continue
-            fi
-
-            UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
-          fi
 
           echo "Cloning branch..."
           git clone --depth 1 --branch "$branch" \
@@ -63,6 +122,13 @@
 
           rm -rf "tmp-$branch"
 
+          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+
+          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+          UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
+
           if [ -z "$RELEASE_ID" ]; then
             echo "Release with tag '$TAG' not found, creating..."
             RELEASE_RESPONSE=$(curl -s -X POST \
@@ -79,6 +145,14 @@
               echo "$RELEASE_RESPONSE"
               continue
             fi
+          else
+            echo "Release with tag '$TAG' found, attaching asset..."
+            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+            ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name==\"$ZIP_NAME\") | .id // empty")
+            if [ -n "$ASSET_ID" ]; then
+              echo "Deleting existing asset $ZIP_NAME with id $ASSET_ID"
+              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID
+            fi
           fi
 
           echo "Uploading ZIP..."
@@ -91,3 +165,8 @@
           echo "Release processed successfully for branch $branch."
           echo "-----------------------------------"
         done < branches_to_process.txt
+    - name: Save updated last_branches cache
+      uses: actions/cache@v4
+      with:
+        path: .last_branches
+        key: last-branches
