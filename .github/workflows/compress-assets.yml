@@ -20,14 +20,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Restore last_branches cache
-      uses: actions/cache@v4
-      with:
-        path: .last_branches
-        key: last-branches
-    - name: Checkout this repository
-      uses: actions/checkout@v4
-
     - name: Fetch all branches from the remote repository
       if: ${{ github.event.inputs.branch == '' }}
       run: |
@@ -72,7 +64,7 @@ jobs:
           echo "No new branches found. Exiting."
           exit 0
         fi
-        
+
     - name: Create output folder
       run: mkdir -p zips
 
@@ -97,6 +89,11 @@ jobs:
             continue
           fi
 
+          if [[ "$branch" != *"."* || "$branch" == *"-"* ]]; then
+            echo "Skipping branch '$branch' (not a stable version)."
+            continue
+          fi
+
           TAG="$branch"
 
           echo ""
@@ -104,6 +101,26 @@ jobs:
           echo "Release tag: $TAG"
           echo "Path to zip: $PATH_TO_ZIP"
           echo "Zip file name: $ZIP_NAME"
+
+          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
+
+          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Release for tag '$TAG' already exists, checking asset..."
+            EXISTING_ASSET=$(curl -s -H "Accept: application/vnd.github+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets | jq -r ".[] | select(.name==\"$ZIP_NAME\") | .id // empty")
+
+            if [ -n "$EXISTING_ASSET" ]; then
+              echo "Asset '$ZIP_NAME' already exists in release '$TAG', skipping branch."
+              continue
+            fi
+
+            UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          fi
 
           echo "Cloning branch..."
           git clone --depth 1 --branch "$branch" \
@@ -122,13 +139,6 @@ jobs:
 
           rm -rf "tmp-$branch"
 
-          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG)
-
-          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
-          UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
-
           if [ -z "$RELEASE_ID" ]; then
             echo "Release with tag '$TAG' not found, creating..."
             RELEASE_RESPONSE=$(curl -s -X POST \
@@ -145,14 +155,6 @@ jobs:
               echo "$RELEASE_RESPONSE"
               continue
             fi
-          else
-            echo "Release with tag '$TAG' found, attaching asset..."
-            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
-            ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name==\"$ZIP_NAME\") | .id // empty")
-            if [ -n "$ASSET_ID" ]; then
-              echo "Deleting existing asset $ZIP_NAME with id $ASSET_ID"
-              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID
-            fi
           fi
 
           echo "Uploading ZIP..."
@@ -165,8 +167,3 @@ jobs:
           echo "Release processed successfully for branch $branch."
           echo "-----------------------------------"
         done < branches_to_process.txt
-    - name: Save updated last_branches cache
-      uses: actions/cache@v4
-      with:
-        path: .last_branches
-        key: last-branches
