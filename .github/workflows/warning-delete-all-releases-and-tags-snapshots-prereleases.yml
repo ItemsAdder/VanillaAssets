@@ -1,0 +1,39 @@
+name: Delete Snapshot and Prerelease Tags and Releases
+
+on:
+  workflow_dispatch:
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete snapshot/prerelease releases
+        run: |
+          echo "Fetching all releases..."
+          gh api repos/${{ github.repository }}/releases --paginate -q '.[] | "\(.id) \(.tag_name)"' | while read id tag; do
+            if [[ "$tag" != *"."* || "$tag" == *"-"* ]]; then
+              echo "Deleting release with tag '$tag' (ID $id)"
+              gh api --method DELETE repos/${{ github.repository }}/releases/$id
+            else
+              echo "Skipping release '$tag'"
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete snapshot/prerelease tags
+        run: |
+          git fetch --tags
+          git tag -l | while read tag; do
+            if [[ "$tag" != *"."* || "$tag" == *"-"* ]]; then
+              echo "Deleting tag '$tag' locally and remotely"
+              git tag -d "$tag"
+              git push origin ":refs/tags/$tag"
+            else
+              echo "Skipping tag '$tag'"
+            fi
+          done
