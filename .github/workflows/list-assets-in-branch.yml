@@ -69,9 +69,27 @@ jobs:
 
           echo ""
           echo "========= Processing branch: $branch ========="
-          echo "Release tag (my repo): $TAG"
-          echo "Path to list files (external repo): $PATH_TO_LIST"
-          echo "Asset list filename: $FILE_LIST_NAME"
+
+          echo "Checking if release with tag '$TAG' exists..."
+          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            "$MY_REPO_API/releases/tags/$TAG")
+
+          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
+
+          if [ -n "$RELEASE_ID" ]; then
+            echo "Release for '$TAG' already exists. Checking if asset '$FILE_LIST_NAME' is attached..."
+            EXISTING_ASSET=$(curl -s -H "Accept: application/vnd.github+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              "$MY_REPO_API/releases/$RELEASE_ID/assets" | jq -r ".[] | select(.name==\"$FILE_LIST_NAME\") | .id // empty")
+
+            if [ -n "$EXISTING_ASSET" ]; then
+              echo "Asset '$FILE_LIST_NAME' already exists in release '$TAG'. Skipping branch."
+              continue
+            fi
+
+            UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
+          fi
 
           echo "Checking if branch $branch exists in external repo..."
           if ! git ls-remote --heads "$EXTERNAL_REPO" "$branch" | grep -q "$branch"; then
@@ -94,16 +112,8 @@ jobs:
 
           rm -rf "tmp-$branch"
 
-          echo "Checking if release with tag '$TAG' exists in my repo..."
-          RELEASE_INFO=$(curl -s -H "Accept: application/vnd.github+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            "$MY_REPO_API/releases/tags/$TAG")
-
-          RELEASE_ID=$(echo "$RELEASE_INFO" | jq -r '.id // empty')
-          UPLOAD_URL=$(echo "$RELEASE_INFO" | jq -r '.upload_url' | sed 's/{?name,label}//')
-
           if [ -z "$RELEASE_ID" ]; then
-            echo "Release with tag '$TAG' not found, creating in my repo..."
+            echo "Creating release '$TAG'..."
             RELEASE_RESPONSE=$(curl -s -X POST \
               -H "Accept: application/vnd.github+json" \
               -H "Authorization: token $GH_TOKEN" \
@@ -114,17 +124,9 @@ jobs:
             UPLOAD_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.upload_url' | sed 's/{?name,label}//')
 
             if [ -z "$RELEASE_ID" ]; then
-              echo "ERROR: Failed to create release in my repo for branch $branch"
+              echo "ERROR: Failed to create release for branch $branch"
               echo "$RELEASE_RESPONSE"
               continue
-            fi
-          else
-            echo "Release with tag '$TAG' found, attaching asset in my repo..."
-            ASSETS=$(curl -s -H "Accept: application/vnd.github+json" -H "Authorization: token $GH_TOKEN" "$MY_REPO_API/releases/$RELEASE_ID/assets")
-            ASSET_ID=$(echo "$ASSETS" | jq -r ".[] | select(.name==\"$FILE_LIST_NAME\") | .id // empty")
-            if [ -n "$ASSET_ID" ]; then
-              echo "Deleting existing asset $FILE_LIST_NAME with id $ASSET_ID in my repo"
-              curl -s -X DELETE -H "Authorization: token $GH_TOKEN" "$MY_REPO_API/releases/assets/$ASSET_ID"
             fi
           fi
 
